@@ -1,10 +1,11 @@
-﻿<#
+<#
 .SYNOPSIS
-    음악 재생 + 랜덤 마우스 이동 스크립트
+    최종 버전: Chrome 음악 재생 + 랜덤 마우스 이동
 .DESCRIPTION
-    - Firefox 단일 창에서 음악 재생
-    - 1920x1080 화면 내에서 랜덤 마우스 이동
-    - 테스트용 1~2분 재생, 2~5분 휴식
+    - Chrome 브라우저 사용
+    - 음악 재생: 5~30분 (300~1800초)
+    - 휴식 시간: 30분~1시간 (1800~3600초)
+    - 1920x1080 화면 내 랜덤 마우스 이동
 #>
 
 Add-Type -TypeDefinition @"
@@ -17,10 +18,10 @@ public class Mouse {
 "@
 
 function Move-RandomMouse {
-    $x = Get-Random -Minimum 0 -Maximum 1920
-    $y = Get-Random -Minimum 0 -Maximum 1080
+    $x = Get-Random -Minimum 100 -Maximum 1820  # 작업표시줄 영역 제외
+    $y = Get-Random -Minimum 100 -Maximum 980   # 시작 메뉴 영역 제외
     [void][Mouse]::SetCursorPos($x, $y)
-    Write-Host "마우스 이동: ($x, $y)"
+    Write-Host "마우스 이동: ($x, $y) - 남은 시간: $(([DateTime]::Now - $endTime).ToString('mm\:ss')"
 }
 
 function Get-GoogleSheetData {
@@ -34,28 +35,29 @@ function Get-GoogleSheetData {
         $data = $response | ConvertFrom-Csv -Header "Links"
         return $data
     } catch {
-        Write-Host "Google 시트 오류: $_"
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Google 시트 오류: $_"
         return $null
     }
 }
 
-function Start-FirefoxWithUrl {
+function Start-ChromeWithUrl {
     param ([string]$Url)
     try {
-        Stop-Firefox
-        Start-Process "firefox.exe" "-new-window $Url"
-        Write-Host "Firefox 시작: $Url"
+        Stop-Chrome
+        # Chrome 단일 창 모드 실행 (기존 창 재사용 방지)
+        Start-Process "chrome.exe" "--new-window $Url --start-maximized"
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Chrome 재생 시작: $Url"
     } catch {
-        Write-Host "Firefox 실행 오류: $_"
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Chrome 실행 오류: $_"
         exit
     }
 }
 
-function Stop-Firefox {
+function Stop-Chrome {
     try {
-        Stop-Process -Name "firefox" -Force -ErrorAction SilentlyContinue
+        Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
     } catch {
-        Write-Host "Firefox 종료 오류: $_"
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Chrome 종료 오류: $_"
     }
 }
 
@@ -69,32 +71,33 @@ while ($true) {
     $links = $sheetData | Where-Object { $_.Links -match "^https?://" } | Select-Object -ExpandProperty Links
     
     if ($links.Count -eq 0) {
-        Write-Host "링크 없음. 1분 후 재시도..."
-        Start-Sleep -Seconds 60
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 재생 가능한 링크 없음. 5분 후 재시도..."
+        Start-Sleep -Seconds 300
         continue
     }
 
     # 음악 재생
     $randomLink = $links | Get-Random
-    Start-FirefoxWithUrl -Url $randomLink
+    Start-ChromeWithUrl -Url $randomLink
     
-    # 재생 시간 설정 (1~2분)
-    $playTime = Get-Random -Minimum 60 -Maximum 120
+    # 재생 시간 설정 (5~30분)
+    $playTime = Get-Random -Minimum 300 -Maximum 1800
     $endTime = [DateTime]::Now.AddSeconds($playTime)
     
-    Write-Host "재생 시간: $playTime 초 ($($endTime.ToString('HH:mm:ss'))"
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 재생 시작 | 종료 예정: $($endTime.ToString('HH:mm:ss'))"
     
-    # 재생 중 마우스 이동
+    # 재생 중 마우스 이동 (15~45초 간격)
     while ([DateTime]::Now -lt $endTime) {
         Move-RandomMouse
-        $sleepTime = Get-Random -Minimum 10 -Maximum 30
+        $sleepTime = Get-Random -Minimum 15 -Maximum 45
         Start-Sleep -Seconds $sleepTime
     }
     
-    Stop-Firefox
+    Stop-Chrome
     
-    # 휴식 시간 (2~5분)
-    $breakTime = Get-Random -Minimum 120 -Maximum 300
-    Write-Host "휴식 시간: $breakTime 초`n"
+    # 휴식 시간 (30분~1시간)
+    $breakTime = Get-Random -Minimum 1800 -Maximum 3600
+    $restEndTime = [DateTime]::Now.AddSeconds($breakTime)
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 휴식 시작 | 재개 예정: $($restEndTime.ToString('HH:mm:ss'))`n"
     Start-Sleep -Seconds $breakTime
 }
