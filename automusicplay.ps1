@@ -1,96 +1,153 @@
 <#
 .SYNOPSIS
-    Chrome을 화면 오른쪽 절반에 열어주는 음악 재생 스크립트
+    Windows 7 완벽 호환 음악 재생 스크립트
 .DESCRIPTION
-    - Chrome 창이 화면 오른쪽 50% 영역에 정확히 배치
-    - 기존 모든 기능 유지 (랜덤 마우스 이동, 재생/휴식 시간 등)
+    - Chrome을 오른쪽 절반 화면에 열기
+    - .NET Framework 2.0 호환 코드
+    - PowerShell 2.0 기본 기능만 사용
 #>
 
+# Win32 API 정의
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class Window {
+public class Win32 {
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     
     [DllImport("user32.dll")]
-    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
     
     [DllImport("user32.dll")]
-    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+    public static extern int GetSystemMetrics(int nIndex);
+    
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+}
+
+public struct RECT {
+    public int Left;
+    public int Top;
+    public int Right;
+    public int Bottom;
 }
 "@
 
-# 화면 해상도 얻기
-$screenWidth = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
-$screenHeight = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+# 화면 해상도 얻기 (Windows 7 호환 방법)
+$SM_CXSCREEN = 0
+$SM_CYSCREEN = 1
+$screenWidth = [Win32]::GetSystemMetrics($SM_CXSCREEN)
+$screenHeight = [Win32]::GetSystemMetrics($SM_CYSCREEN)
 $halfWidth = $screenWidth / 2
 
+# Chrome 실행 함수
 function Start-ChromeHalfScreen {
     param ($Url)
     try {
-        Stop-Chrome
+        # Chrome 종료
+        Stop-Process -Name "chrome*" -ErrorAction SilentlyContinue
         
-        # Chrome 실행 (최소화 상태로 시작)
+        # Chrome 경로 확인
         $chromePath = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
         if (-not (Test-Path $chromePath)) {
             $chromePath = "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
         }
-        $process = Start-Process $chromePath "--new-window $Url" -PassThru
         
-        # 3초 대기 후 창 조정
+        # Chrome 실행
+        $process = Start-Process -FilePath $chromePath -ArgumentList "--new-window $Url" -PassThru
+        
+        # 창 핸들 찾기를 위한 대기
         Start-Sleep -Seconds 3
         
-        # Chrome 창 핸들 찾기
-        $hwnd = [Window]::FindWindow("Chrome_WidgetWin_1", $null)
+        # 창 핸들 찾기
+        $hwnd = [Win32]::FindWindow("Chrome_WidgetWin_1", $null)
         if ($hwnd -ne [IntPtr]::Zero) {
-            # 오른쪽 절반으로 창 이동 (X: 화면너비/2, Y: 0, Width: 화면너비/2, Height: 전체높이)
-            [Window]::SetWindowPos($hwnd, [IntPtr]::Zero, 
-                                 $halfWidth, 0, 
-                                 $halfWidth, $screenHeight, 
-                                 0x0040)  # 0x0040 = SWP_SHOWWINDOW
-            
+            # 창 크기/위치 조정
+            [Win32]::SetWindowPos($hwnd, [IntPtr]::Zero, 
+                                $halfWidth, 0, 
+                                $halfWidth, $screenHeight, 
+                                0x0040)  # SWP_SHOWWINDOW
             Write-Output "Chrome을 오른쪽 절반에 배치했습니다."
-        } else {
-            Write-Output "Chrome 창 핸들을 찾을 수 없습니다."
         }
     } catch {
-        Write-Output "Chrome 실행 오류: $_"
+        Write-Output "오류 발생: $_"
     }
 }
 
-# 기존 함수들 유지 (Get-SheetData, Move-MouseRandom, Stop-Chrome 등은 동일)
+# Google 시트 데이터 가져오기
+function Get-SheetData {
+    param ($SheetId, $Range)
+    
+    $url = "https://docs.google.com/spreadsheets/d/$SheetId/gviz/tq?tqx=out:csv&range=$Range"
+    
+    try {
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Encoding = [System.Text.Encoding]::UTF8
+        $response = $webClient.DownloadString($url)
+        return $response | ConvertFrom-Csv -Header "Links"
+    } catch {
+        Write-Output "Google 시트 접근 오류"
+        return $null
+    }
+}
 
-# 메인 실행부
+# 랜덤 마우스 이동
+function Move-MouseRandom {
+    $x = Get-Random -Minimum 100 -Maximum ($screenWidth - 100)
+    $y = Get-Random -Minimum 100 -Maximum ($screenHeight - 100)
+    try {
+        Add-Type -TypeDefinition @"
+        using System;
+        using System.Runtime.InteropServices;
+        public class Mouse {
+            [DllImport("user32.dll")]
+            public static extern bool SetCursorPos(int x, int y);
+        }
+"@ -ErrorAction SilentlyContinue
+        [Mouse]::SetCursorPos($x, $y)
+    } catch {}
+}
+
+# 메인 실행
 $sheetId = "1zjQEDjX6p40xfZ6h0tuxO-YUHqxOS7vss9z3DziKKcA"
 $range = "B2:B1000"
 
 while ($true) {
+    # 데이터 가져오기
     $data = Get-SheetData -SheetId $sheetId -Range $range
-    $links = $data | Where { $_.Links -match "^https?://" } | Select -ExpandProperty Links
+    if (-not $data) {
+        Write-Output "데이터를 가져오지 못했습니다. 5분 후 재시도..."
+        Start-Sleep -Seconds 300
+        continue
+    }
     
-    if (!$links -or $links.Count -eq 0) {
-        Write-Output "No links found. Retry in 5 minutes..."
+    $links = $data | Where-Object { $_.Links -match "^https?://" } | Select-Object -ExpandProperty Links
+    if (-not $links -or $links.Count -eq 0) {
+        Write-Output "재생 가능한 링크가 없습니다. 5분 후 재시도..."
         Start-Sleep -Seconds 300
         continue
     }
 
+    # 랜덤 링크 선택
     $url = $links | Get-Random
-    Start-ChromeHalfScreen -Url $url  # ← 수정된 함수 호출
+    Start-ChromeHalfScreen -Url $url
     
-    $playSec = Get-Random -Minimum 300 -Maximum 1800
-    $endTime = (Get-Date).AddSeconds($playSec)
+    # 재생 시간 (5~30분)
+    $playTime = Get-Random -Minimum 300 -Maximum 1800
+    $endTime = (Get-Date).AddSeconds($playTime)
+    Write-Output "재생 중... 종료 예정: $($endTime.ToString('HH:mm:ss'))"
     
-    Write-Output "Playing until $($endTime.ToString('HH:mm:ss'))"
-    
+    # 마우스 이동 (15~45초 간격)
     while ((Get-Date) -lt $endTime) {
         Move-MouseRandom
         Start-Sleep -Seconds (Get-Random -Minimum 15 -Maximum 45)
     }
     
-    Stop-Chrome
+    # Chrome 종료
+    Stop-Process -Name "chrome*" -ErrorAction SilentlyContinue
     
-    $breakSec = Get-Random -Minimum 1800 -Maximum 3600
-    Write-Output "Break until $((Get-Date).AddSeconds($breakSec).ToString('HH:mm:ss'))"
-    Start-Sleep -Seconds $breakSec
+    # 휴식 시간 (30분~1시간)
+    $breakTime = Get-Random -Minimum 1800 -Maximum 3600
+    Write-Output "휴식 중... 재개 예정: $((Get-Date).AddSeconds($breakTime).ToString('HH:mm:ss'))"
+    Start-Sleep -Seconds $breakTime
 }
