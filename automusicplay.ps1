@@ -2,13 +2,13 @@
 .SYNOPSIS
     Windows 7 완벽 호환 음악 재생 스크립트
 .DESCRIPTION
-    - Chrome을 오른쪽 절반 화면에 열기
-    - .NET Framework 2.0 호환 코드
+    - Chrome을 오른쪽 절반 화면에 표시
+    - .NET Framework 2.0 호환
     - PowerShell 2.0 기본 기능만 사용
 #>
 
 # Win32 API 정의
-Add-Type @"
+$apiDefinition = @"
 using System;
 using System.Runtime.InteropServices;
 public class Win32 {
@@ -22,35 +22,40 @@ public class Win32 {
     public static extern int GetSystemMetrics(int nIndex);
     
     [DllImport("user32.dll")]
-    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-}
-
-public struct RECT {
-    public int Left;
-    public int Top;
-    public int Right;
-    public int Bottom;
+    public static extern bool SetCursorPos(int x, int y);
 }
 "@
 
-# 화면 해상도 얻기 (Windows 7 호환 방법)
+try {
+    Add-Type -TypeDefinition $apiDefinition
+} catch {
+    Write-Output "Win32 API 로드 실패: $_"
+    exit
+}
+
+# 화면 해상도 얻기
 $SM_CXSCREEN = 0
 $SM_CYSCREEN = 1
 $screenWidth = [Win32]::GetSystemMetrics($SM_CXSCREEN)
 $screenHeight = [Win32]::GetSystemMetrics($SM_CYSCREEN)
-$halfWidth = $screenWidth / 2
+$halfWidth = [math]::Floor($screenWidth / 2)
 
 # Chrome 실행 함수
 function Start-ChromeHalfScreen {
     param ($Url)
     try {
-        # Chrome 종료
+        # 기존 Chrome 프로세스 종료
         Stop-Process -Name "chrome*" -ErrorAction SilentlyContinue
         
         # Chrome 경로 확인
         $chromePath = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
         if (-not (Test-Path $chromePath)) {
             $chromePath = "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+        }
+        
+        if (-not (Test-Path $chromePath)) {
+            Write-Output "Chrome을 찾을 수 없습니다. 설치 후 다시 시도하세요."
+            exit
         }
         
         # Chrome 실행
@@ -62,15 +67,17 @@ function Start-ChromeHalfScreen {
         # 창 핸들 찾기
         $hwnd = [Win32]::FindWindow("Chrome_WidgetWin_1", $null)
         if ($hwnd -ne [IntPtr]::Zero) {
-            # 창 크기/위치 조정
+            # 창 크기/위치 조정 (오른쪽 절반)
             [Win32]::SetWindowPos($hwnd, [IntPtr]::Zero, 
                                 $halfWidth, 0, 
                                 $halfWidth, $screenHeight, 
                                 0x0040)  # SWP_SHOWWINDOW
             Write-Output "Chrome을 오른쪽 절반에 배치했습니다."
+        } else {
+            Write-Output "Chrome 창을 찾을 수 없습니다."
         }
     } catch {
-        Write-Output "오류 발생: $_"
+        Write-Output "Chrome 실행 오류: $_"
     }
 }
 
@@ -86,26 +93,17 @@ function Get-SheetData {
         $response = $webClient.DownloadString($url)
         return $response | ConvertFrom-Csv -Header "Links"
     } catch {
-        Write-Output "Google 시트 접근 오류"
+        Write-Output "Google 시트 접근 오류: $_"
         return $null
     }
 }
 
 # 랜덤 마우스 이동
-function Move-MouseRandom {
+function Move-RandomMouse {
     $x = Get-Random -Minimum 100 -Maximum ($screenWidth - 100)
     $y = Get-Random -Minimum 100 -Maximum ($screenHeight - 100)
-    try {
-        Add-Type -TypeDefinition @"
-        using System;
-        using System.Runtime.InteropServices;
-        public class Mouse {
-            [DllImport("user32.dll")]
-            public static extern bool SetCursorPos(int x, int y);
-        }
-"@ -ErrorAction SilentlyContinue
-        [Mouse]::SetCursorPos($x, $y)
-    } catch {}
+    [Win32]::SetCursorPos($x, $y)
+    Write-Output "마우스 이동: ($x, $y)"
 }
 
 # 메인 실행
@@ -130,6 +128,7 @@ while ($true) {
 
     # 랜덤 링크 선택
     $url = $links | Get-Random
+    Write-Output "재생할 링크 선택됨: $url"
     Start-ChromeHalfScreen -Url $url
     
     # 재생 시간 (5~30분)
@@ -139,8 +138,9 @@ while ($true) {
     
     # 마우스 이동 (15~45초 간격)
     while ((Get-Date) -lt $endTime) {
-        Move-MouseRandom
-        Start-Sleep -Seconds (Get-Random -Minimum 15 -Maximum 45)
+        Move-RandomMouse
+        $sleepTime = Get-Random -Minimum 15 -Maximum 45
+        Start-Sleep -Seconds $sleepTime
     }
     
     # Chrome 종료
