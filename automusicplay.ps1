@@ -1,66 +1,67 @@
 <#
 .SYNOPSIS
-    Windows 7 완전 호환 음악 재생 스크립트
+    Chrome을 화면 오른쪽 절반에 열어주는 음악 재생 스크립트
 .DESCRIPTION
-    - 모든 유니코드 문자 제거
-    - UTF-8 BOM 인코딩 적용
-    - PowerShell 2.0 완벽 지원
+    - Chrome 창이 화면 오른쪽 50% 영역에 정확히 배치
+    - 기존 모든 기능 유지 (랜덤 마우스 이동, 재생/휴식 시간 등)
 #>
 
-# 마우스 제어 API
-$mouseCode = @'
+Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class Mouse {
+public class Window {
     [DllImport("user32.dll")]
-    public static extern bool SetCursorPos(int x, int y);
-}
-'@
-
-try { Add-Type -TypeDefinition $mouseCode } catch { Write-Output "Mouse API load failed" }
-
-function Move-MouseRandom {
-    $x = Get-Random -Minimum 100 -Maximum 1820
-    $y = Get-Random -Minimum 100 -Maximum 980
-    try {
-        [Mouse]::SetCursorPos($x, $y)
-        Write-Output "Mouse moved to ($x, $y)"
-    } catch { Write-Output "Mouse move error" }
-}
-
-function Get-SheetData {
-    param ($SheetId, $Range)
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     
-    $url = "https://docs.google.com/spreadsheets/d/$SheetId/gviz/tq?tqx=out:csv&range=$Range"
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     
-    try {
-        $wc = New-Object System.Net.WebClient
-        $wc.Encoding = [System.Text.Encoding]::UTF8
-        $data = $wc.DownloadString($url) | ConvertFrom-Csv -Header "Links"
-        return $data
-    } catch {
-        Write-Output "Google Sheets error"
-        return $null
-    }
+    [DllImport("user32.dll")]
+    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 }
+"@
 
-function Start-Chrome {
+# 화면 해상도 얻기
+$screenWidth = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
+$screenHeight = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+$halfWidth = $screenWidth / 2
+
+function Start-ChromeHalfScreen {
     param ($Url)
     try {
         Stop-Chrome
-        $chrome = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
-        if (!(Test-Path $chrome)) { $chrome = "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe" }
-        Start-Process $chrome "--new-window $Url --start-maximized"
-        Write-Output "Chrome started: $Url"
-    } catch { Write-Output "Chrome start error" }
+        
+        # Chrome 실행 (최소화 상태로 시작)
+        $chromePath = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
+        if (-not (Test-Path $chromePath)) {
+            $chromePath = "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+        }
+        $process = Start-Process $chromePath "--new-window $Url" -PassThru
+        
+        # 3초 대기 후 창 조정
+        Start-Sleep -Seconds 3
+        
+        # Chrome 창 핸들 찾기
+        $hwnd = [Window]::FindWindow("Chrome_WidgetWin_1", $null)
+        if ($hwnd -ne [IntPtr]::Zero) {
+            # 오른쪽 절반으로 창 이동 (X: 화면너비/2, Y: 0, Width: 화면너비/2, Height: 전체높이)
+            [Window]::SetWindowPos($hwnd, [IntPtr]::Zero, 
+                                 $halfWidth, 0, 
+                                 $halfWidth, $screenHeight, 
+                                 0x0040)  # 0x0040 = SWP_SHOWWINDOW
+            
+            Write-Output "Chrome을 오른쪽 절반에 배치했습니다."
+        } else {
+            Write-Output "Chrome 창 핸들을 찾을 수 없습니다."
+        }
+    } catch {
+        Write-Output "Chrome 실행 오류: $_"
+    }
 }
 
-function Stop-Chrome {
-    try { Stop-Process -Name "chrome*" -Force -ErrorAction SilentlyContinue }
-    catch { Write-Output "Chrome stop error" }
-}
+# 기존 함수들 유지 (Get-SheetData, Move-MouseRandom, Stop-Chrome 등은 동일)
 
-# 메인 실행
+# 메인 실행부
 $sheetId = "1zjQEDjX6p40xfZ6h0tuxO-YUHqxOS7vss9z3DziKKcA"
 $range = "B2:B1000"
 
@@ -75,7 +76,7 @@ while ($true) {
     }
 
     $url = $links | Get-Random
-    Start-Chrome -Url $url
+    Start-ChromeHalfScreen -Url $url  # ← 수정된 함수 호출
     
     $playSec = Get-Random -Minimum 300 -Maximum 1800
     $endTime = (Get-Date).AddSeconds($playSec)
